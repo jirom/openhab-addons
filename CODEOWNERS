@@ -297,6 +297,7 @@
 /bundles/org.openhab.binding.roku/ @mlobstein
 /bundles/org.openhab.binding.rotel/ @lolodomo
 /bundles/org.openhab.binding.russound/ @openhab/add-ons-maintainers
+/bundles/org.openhab.binding.ryobi/ @jirom
 /bundles/org.openhab.binding.sagercaster/ @clinique
 /bundles/org.openhab.binding.samsungtv/ @paulianttila
 /bundles/org.openhab.binding.satel/ @druciak
