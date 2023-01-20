@@ -27,8 +27,15 @@ public class RyobiBindingConstants {
     private static final String BINDING_ID = "ryobi";
 
     // List of all Thing Type UIDs
-    public static final ThingTypeUID THING_TYPE_SAMPLE = new ThingTypeUID(BINDING_ID, "sample");
+    public static final ThingTypeUID ACCOUNT_THING_TYPE = new ThingTypeUID(BINDING_ID, "account");
+    public static final ThingTypeUID GARAGE_DOOR_OPENER_THING_TYPE = new ThingTypeUID(BINDING_ID, "garage-door-opener");
 
     // List of all Channel ids
-    public static final String CHANNEL_1 = "channel1";
+    public static final String CHANNEL_GARAGE_DOOR = "garage-door";
+    public static final String CHANNEL_LIGHT = "light";
+
+    // Configuration
+    public static final String GARAGE_DOOR_OPENER_ID = "id";
+    public static final String ACCOUNT_USERNAME = "username";
+    public static final String ACCOUNT_PASSWORD = "password";
 }
