@@ -196,10 +196,6 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
     }
 
     private synchronized void fetchData() {
-        try {
-            getDevices();
-        } catch (InterruptedException e) {
-            // we were shut down, ignore
-        }
+        getDevices();
     }
 }

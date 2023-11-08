@@ -37,10 +37,10 @@ public class RyobiDeviceDiscoveryService extends AbstractDiscoveryService {
     protected void startScan() {
         ryobiAccountHandler.getDevices().stream().filter(device -> device.deviceTypeIds.contains("gdoMasterUnit"))
                 .map(device -> {
+                    final ThingUID bridgeUID = ryobiAccountHandler.getThing().getUID();
                     final ThingUID thingUID = new ThingUID(RyobiBindingConstants.GARAGE_DOOR_OPENER_THING_TYPE,
-                            device.id);
-                    return DiscoveryResultBuilder.create(thingUID).withBridge(ryobiAccountHandler.getThing().getUID())
-                            .withLabel(device.metaData.name)
+                            bridgeUID, device.id);
+                    return DiscoveryResultBuilder.create(thingUID).withBridge(bridgeUID).withLabel(device.metaData.name)
                             .withProperty(RyobiBindingConstants.GARAGE_DOOR_OPENER_ID, device.id)
                             .withProperty("version", device.metaData.version).build();
                 }).forEach(this::thingDiscovered);

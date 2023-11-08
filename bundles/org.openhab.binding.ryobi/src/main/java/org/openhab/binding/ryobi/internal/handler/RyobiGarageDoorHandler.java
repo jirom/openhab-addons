@@ -53,6 +53,35 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
         super(thing);
     }
 
+    private void refreshStatus() {
+        final RyobiAccountHandler accountHandler = (RyobiAccountHandler) getBridge().getHandler();
+        if (accountHandler == null) {
+            LOGGER.error("Could not find account handler. Not refreshing.");
+            return;
+        }
+
+        final Optional<DetailedDevice> detailedDevice = accountHandler.getDevice(getId());
+
+        if (!detailedDevice.isPresent()) {
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                    "Could not get state for device: " + getId());
+            return;
+        }
+
+        accountHandler.getDevice(getId()).ifPresent(device -> {
+            final Map<String, DetailedDevice.AttributeValue> garageDoorAttributes = device.attributes
+                    .get(DetailedDevice.ATTR_GARAGE_DOOR);
+            final OnOffType doorState = OnOffType.from(((double) garageDoorAttributes.get("doorState").value) == 1);
+            updateState(CHANNEL_GARAGE_DOOR, doorState);
+
+            final Map<String, DetailedDevice.AttributeValue> lightAttributes = device.attributes
+                    .get(DetailedDevice.ATTR_GARAGE_LIGHT);
+            final OnOffType lightState = OnOffType.from(((boolean) lightAttributes.get("lightState").value));
+            updateState(CHANNEL_GARAGE_DOOR, lightState);
+        });
+        updateStatus(ThingStatus.ONLINE);
+    }
+
     @Override
     public void handleCommand(ChannelUID channelUID, Command command) {
         LOGGER.debug("Received command:{} for channel:{}", command, channelUID);
@@ -63,26 +92,7 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
         }
 
         if (command instanceof RefreshType) {
-            final Optional<DetailedDevice> detailedDevice = accountHandler.getDevice(getId());
-
-            if (!detailedDevice.isPresent()) {
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                        "Could not get state for device: " + getId());
-                return;
-            }
-
-            accountHandler.getDevice(getId()).ifPresent(device -> {
-                final Map<String, DetailedDevice.AttributeValue> garageDoorAttributes = device.attributes
-                        .get(DetailedDevice.ATTR_GARAGE_DOOR);
-                final OnOffType doorState = OnOffType.from(((double) garageDoorAttributes.get("doorState").value) == 1);
-                updateState(CHANNEL_GARAGE_DOOR, doorState);
-
-                final Map<String, DetailedDevice.AttributeValue> lightAttributes = device.attributes
-                        .get(DetailedDevice.ATTR_GARAGE_LIGHT);
-                final OnOffType lightState = OnOffType.from(((boolean) lightAttributes.get("lightState").value));
-                updateState(CHANNEL_GARAGE_DOOR, lightState);
-            });
-            updateStatus(ThingStatus.ONLINE);
+            refreshStatus();
             return;
         }
 
@@ -130,6 +140,10 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
     public void initialize() {
         config = getConfigAs(RyobiGarageDoorConfig.class);
         updateStatus(ThingStatus.UNKNOWN);
+
+        scheduler.execute(() -> {
+            refreshStatus();
+        });
     }
 
     private String getId() {
