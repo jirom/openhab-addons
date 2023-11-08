@@ -16,6 +16,8 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -44,11 +46,16 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 public class RyobiAccountHandler extends BaseBridgeHandler {
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiAccountHandler.class);
+    private static final Integer RAPID_REFRESH_SECONDS = 5;
+    private static final Integer NORMAL_REFRESH_SECONDS = 60;
 
     private final RyobiAccountManager accountManager;
     private final RyobiWebSocketClient webSocketClient;
     private @Nullable RyobiAccountConfig config;
     private @Nullable String apiKey;
+
+    private @Nullable Future<?> normalPollFuture;
+    private @Nullable Future<?> rapidPollFuture;
 
     public RyobiAccountHandler(Bridge bridge, RyobiAccountManager ryobiAccountManager,
             RyobiWebSocketClient ryobiWebSocketClient) {
@@ -75,6 +82,8 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
             LOGGER.info("Successfully got the api key: {}", apiKey);
             updateStatus(ThingStatus.ONLINE);
+
+            restartPolls(false);
         });
     }
 
@@ -94,6 +103,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
             socket.sendMessage(request);
 
             LOGGER.info("Successfully updated door state to: {}", state);
+            restartPolls(true);
             return true;
         } catch (IOException | RyobiWebSocket.UnauthenticatedException e) {
             LOGGER.error("Could not update door state.", e);
@@ -115,6 +125,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
             socket.sendMessage(request);
 
             LOGGER.info("Successfully updated light state to: {}", state);
+            restartPolls(true);
             return true;
         } catch (IOException | RyobiWebSocket.UnauthenticatedException e) {
             LOGGER.error("Could not update light state.", e);
@@ -138,6 +149,57 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         } catch (IOException e) {
             LOGGER.error("Could not get devices! Returning empty collection", e);
             return Optional.empty();
+        }
+    }
+
+    private void stopPolls() {
+        stopNormalPoll();
+        stopRapidPoll();
+    }
+
+    private synchronized void stopNormalPoll() {
+        stopFuture(normalPollFuture);
+        normalPollFuture = null;
+    }
+
+    private synchronized void stopRapidPoll() {
+        stopFuture(rapidPollFuture);
+        rapidPollFuture = null;
+    }
+
+    private void stopFuture(@Nullable Future<?> future) {
+        if (future != null) {
+            future.cancel(true);
+        }
+    }
+
+    private synchronized void restartPolls(boolean rapid) {
+        stopPolls();
+        if (rapid) {
+            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 35, NORMAL_REFRESH_SECONDS,
+                    TimeUnit.SECONDS);
+            rapidPollFuture = scheduler.scheduleWithFixedDelay(this::rapidPoll, 3, RAPID_REFRESH_SECONDS,
+                    TimeUnit.SECONDS);
+        } else {
+            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 0, NORMAL_REFRESH_SECONDS,
+                    TimeUnit.SECONDS);
+        }
+    }
+
+    private void normalPoll() {
+        stopRapidPoll();
+        fetchData();
+    }
+
+    private void rapidPoll() {
+        fetchData();
+    }
+
+    private synchronized void fetchData() {
+        try {
+            getDevices();
+        } catch (InterruptedException e) {
+            // we were shut down, ignore
         }
     }
 }
