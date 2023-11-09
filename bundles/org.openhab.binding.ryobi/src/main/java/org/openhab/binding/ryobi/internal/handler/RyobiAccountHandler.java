@@ -16,13 +16,14 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.ryobi.internal.RyobiAccountManager;
 import org.openhab.binding.ryobi.internal.RyobiWebSocket;
+import org.openhab.binding.ryobi.internal.RyobiWebSocket.UnauthenticatedException;
 import org.openhab.binding.ryobi.internal.RyobiWebSocketClient;
 import org.openhab.binding.ryobi.internal.config.RyobiAccountConfig;
 import org.openhab.binding.ryobi.internal.models.BasicDevice;
@@ -40,22 +41,35 @@ import org.openhab.core.types.Command;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.github.rholder.retry.Attempt;
+import com.github.rholder.retry.RetryException;
+import com.github.rholder.retry.RetryListener;
+import com.github.rholder.retry.Retryer;
+import com.github.rholder.retry.RetryerBuilder;
+import com.github.rholder.retry.StopStrategies;
+import com.github.rholder.retry.WaitStrategies;
+
 /**
  * @author Manuel Gerome Navarro - Initial contribution
  */
 @NonNullByDefault
 public class RyobiAccountHandler extends BaseBridgeHandler {
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiAccountHandler.class);
-    private static final Integer RAPID_REFRESH_SECONDS = 5;
-    private static final Integer NORMAL_REFRESH_SECONDS = 60;
 
     private final RyobiAccountManager accountManager;
     private final RyobiWebSocketClient webSocketClient;
     private @Nullable RyobiAccountConfig config;
-    private @Nullable String apiKey;
+    private Optional<String> apiKey = Optional.empty();
 
-    private @Nullable Future<?> normalPollFuture;
-    private @Nullable Future<?> rapidPollFuture;
+    private final RetryListener retryListener = new RetryListener() {
+        @Override
+        public <V> void onRetry(@Nullable Attempt<V> attempt) {
+            if (attempt.hasException()) {
+                LOGGER.warn("Call failed. Attempting to reauthenticate first.", attempt.getExceptionCause());
+                reauthenticate();
+            }
+        }
+    };
 
     public RyobiAccountHandler(Bridge bridge, RyobiAccountManager ryobiAccountManager,
             RyobiWebSocketClient ryobiWebSocketClient) {
@@ -71,7 +85,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         config = getConfigAs(RyobiAccountConfig.class);
         scheduler.execute(() -> {
             try {
-                this.apiKey = accountManager.getApiKey(config.username, config.password);
+                this.apiKey = Optional.of(getApiKey());
             } catch (IOException e) {
                 LOGGER.error("Could not get api key!", e);
                 // TODO Actually check errors properly first!
@@ -82,9 +96,27 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
             LOGGER.info("Successfully got the api key: {}", apiKey);
             updateStatus(ThingStatus.ONLINE);
-
-            restartPolls(false);
         });
+    }
+
+    private String getApiKey() throws IOException {
+        if (!apiKey.isPresent()) {
+            apiKey = Optional.of(accountManager.getApiKey(config.username, config.password));
+        }
+
+        return apiKey.orElseThrow();
+    }
+
+    private void reauthenticate() {
+        try {
+            this.apiKey = Optional.of(getApiKey());
+        } catch (IOException e) {
+            LOGGER.error("Could not get api key!", e);
+            // TODO Actually check errors properly first!
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                    "Can not access device as username and/or password are invalid");
+            return;
+        }
     }
 
     @Override
@@ -93,19 +125,20 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
     public boolean updateDoorState(final String garageDoorOpenerId, final OnOffType state) {
         LOGGER.debug("Updating door state to: {}", state);
+        final Retryer<Boolean> retryer = createRetryer();
+
         final int doorState = state.as(DecimalType.class).intValue();
-        try {
-            final RyobiWebSocket socket = webSocketClient.open(config.username,
-                    accountManager.getApiKey(config.username, config.password));
 
-            final RyobiWebSocketDoorRequest request = new RyobiWebSocketDoorRequest(
-                    RyobiWebSocketDoorRequest.DoorState.fromValue(doorState), garageDoorOpenerId);
-            socket.sendMessage(request);
+        try (final RyobiWebSocket socket = webSocketClient.open(config.username, getApiKey())) {
+            retryer.call(() -> {
+                final RyobiWebSocketDoorRequest request = new RyobiWebSocketDoorRequest(
+                        RyobiWebSocketDoorRequest.DoorState.fromValue(doorState), garageDoorOpenerId);
+                socket.sendMessage(request);
 
-            LOGGER.info("Successfully updated door state to: {}", state);
-            restartPolls(true);
-            return true;
-        } catch (IOException | RyobiWebSocket.UnauthenticatedException e) {
+                LOGGER.info("Successfully updated door state to: {}", state);
+                return true;
+            });
+        } catch (Exception e) {
             LOGGER.error("Could not update door state.", e);
         }
 
@@ -114,20 +147,21 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
     public boolean updateLightState(final String garageDoorOpenerId, final OnOffType state) {
         LOGGER.debug("Updating light state to: {}", state);
+        final Retryer<Boolean> retryer = createRetryer();
+
         final boolean isLightOn = state.as(DecimalType.class).intValue() == 1;
-        try {
-            final RyobiWebSocket socket = webSocketClient.open(config.username,
-                    accountManager.getApiKey(config.username, config.password));
+        try (final RyobiWebSocket socket = webSocketClient.open(config.username, getApiKey())) {
+            retryer.call(() -> {
+                final RyobiWebSocketLightRequest request = new RyobiWebSocketLightRequest(
+                        isLightOn ? RyobiWebSocketLightRequest.LightState.ON
+                                : RyobiWebSocketLightRequest.LightState.OFF,
+                        garageDoorOpenerId);
+                socket.sendMessage(request);
 
-            final RyobiWebSocketLightRequest request = new RyobiWebSocketLightRequest(
-                    isLightOn ? RyobiWebSocketLightRequest.LightState.ON : RyobiWebSocketLightRequest.LightState.OFF,
-                    garageDoorOpenerId);
-            socket.sendMessage(request);
-
-            LOGGER.info("Successfully updated light state to: {}", state);
-            restartPolls(true);
-            return true;
-        } catch (IOException | RyobiWebSocket.UnauthenticatedException e) {
+                LOGGER.info("Successfully updated light state to: {}", state);
+                return true;
+            });
+        } catch (Exception e) {
             LOGGER.error("Could not update light state.", e);
         }
 
@@ -135,67 +169,32 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
     }
 
     public List<BasicDevice> getDevices() {
+        final Retryer<List<BasicDevice>> retryer = createRetryer();
+
         try {
-            return accountManager.getDevices();
-        } catch (IOException e) {
+            return retryer.call(() -> accountManager.getDevices());
+        } catch (ExecutionException | RetryException e) {
             LOGGER.error("Could not get devices! Returning empty collection", e);
             return Collections.emptyList();
         }
     }
 
     public Optional<DetailedDevice> getDevice(final String deviceId) {
+        final Retryer<Optional<DetailedDevice>> retryer = createRetryer();
+
         try {
-            return Optional.of(accountManager.getDetailedDevice(deviceId));
-        } catch (IOException e) {
-            LOGGER.error("Could not get devices! Returning empty collection", e);
+            return retryer.call(() -> Optional.of(accountManager.getDetailedDevice(deviceId)));
+        } catch (ExecutionException | RetryException e) {
+            LOGGER.error("Could not get devices! Returning nothing", e);
             return Optional.empty();
         }
     }
 
-    private void stopPolls() {
-        stopNormalPoll();
-        stopRapidPoll();
-    }
-
-    private synchronized void stopNormalPoll() {
-        stopFuture(normalPollFuture);
-        normalPollFuture = null;
-    }
-
-    private synchronized void stopRapidPoll() {
-        stopFuture(rapidPollFuture);
-        rapidPollFuture = null;
-    }
-
-    private void stopFuture(@Nullable Future<?> future) {
-        if (future != null) {
-            future.cancel(true);
-        }
-    }
-
-    private synchronized void restartPolls(boolean rapid) {
-        stopPolls();
-        if (rapid) {
-            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 35, NORMAL_REFRESH_SECONDS,
-                    TimeUnit.SECONDS);
-            rapidPollFuture = scheduler.scheduleWithFixedDelay(this::rapidPoll, 3, RAPID_REFRESH_SECONDS,
-                    TimeUnit.SECONDS);
-        } else {
-            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 0, NORMAL_REFRESH_SECONDS,
-                    TimeUnit.SECONDS);
-        }
-    }
-
-    private void normalPoll() {
-        stopRapidPoll();
-        fetchData();
-    }
-
-    private void rapidPoll() {
-        fetchData();
-    }
-
-    private synchronized void fetchData() {
-        getDevices();
+    private <T> Retryer<T> createRetryer() {
+        return RetryerBuilder.<T> newBuilder().retryIfExceptionOfType(IOException.class)
+                .retryIfExceptionOfType(UnauthenticatedException.class)
+                .withStopStrategy(StopStrategies.stopAfterAttempt(3))
+                .withWaitStrategy(WaitStrategies.fixedWait(1, TimeUnit.SECONDS)).withRetryListener(retryListener)
+                .build();
     }
 }

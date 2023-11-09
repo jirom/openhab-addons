@@ -17,6 +17,8 @@ import static org.openhab.binding.ryobi.internal.RyobiBindingConstants.CHANNEL_L
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -41,8 +43,13 @@ import org.slf4j.LoggerFactory;
 public class RyobiGarageDoorHandler extends BaseThingHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiGarageDoorHandler.class);
+    private static final Integer RAPID_REFRESH_SECONDS = 5;
+    private static final Integer NORMAL_REFRESH_SECONDS = 60;
 
     private @Nullable RyobiGarageDoorConfig config;
+
+    private @Nullable Future<?> normalPollFuture;
+    private @Nullable Future<?> rapidPollFuture;
 
     /**
      * Creates a new instance of this class for the {@link Thing}.
@@ -104,6 +111,7 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
                     if (updatedSuccessfully) {
                         updateState(CHANNEL_GARAGE_DOOR, newState);
                     }
+                    restartPolls(true);
                 } else {
                     LOGGER.error("Unknown command:{} for channel:{}", command, channelUID);
                 }
@@ -118,6 +126,7 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
                     if (updatedSuccessfully) {
                         updateState(CHANNEL_LIGHT, newState);
                     }
+                    restartPolls(true);
                 } else {
                     LOGGER.error("Unknown command:{} for channel:{}", command, channelUID);
                 }
@@ -144,6 +153,7 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
         scheduler.execute(() -> {
             refreshStatus();
         });
+        restartPolls(false);
     }
 
     private String getId() {
@@ -157,5 +167,48 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
         }
 
         throw new IllegalStateException("Unknown device id!");
+    }
+
+    private void stopPolls() {
+        stopNormalPoll();
+        stopRapidPoll();
+    }
+
+    private synchronized void stopNormalPoll() {
+        stopFuture(normalPollFuture);
+        normalPollFuture = null;
+    }
+
+    private synchronized void stopRapidPoll() {
+        stopFuture(rapidPollFuture);
+        rapidPollFuture = null;
+    }
+
+    private void stopFuture(@Nullable Future<?> future) {
+        if (future != null) {
+            future.cancel(true);
+        }
+    }
+
+    private synchronized void restartPolls(boolean rapid) {
+        stopPolls();
+        if (rapid) {
+            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 35, NORMAL_REFRESH_SECONDS,
+                    TimeUnit.SECONDS);
+            rapidPollFuture = scheduler.scheduleWithFixedDelay(this::rapidPoll, 3, RAPID_REFRESH_SECONDS,
+                    TimeUnit.SECONDS);
+        } else {
+            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 0, NORMAL_REFRESH_SECONDS,
+                    TimeUnit.SECONDS);
+        }
+    }
+
+    private void normalPoll() {
+        stopRapidPoll();
+        refreshStatus();
+    }
+
+    private void rapidPoll() {
+        refreshStatus();
     }
 }

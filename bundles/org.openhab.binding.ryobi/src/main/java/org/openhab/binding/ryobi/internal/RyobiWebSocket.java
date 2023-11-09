@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.ryobi.internal;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -37,7 +38,7 @@ import com.google.gson.Gson;
  */
 @WebSocket(maxTextMessageSize = 64 * 1024)
 @NonNullByDefault
-public class RyobiWebSocket {
+public class RyobiWebSocket implements Closeable {
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiWebSocket.class);
 
     private final Gson gson;
@@ -86,7 +87,9 @@ public class RyobiWebSocket {
         LOGGER.debug("Got message: {}", message);
 
         if (message.contains("Thanks") && session != null) {
-            session.close(StatusCode.NORMAL, "I'm done");
+            if (this.session != null) {
+                session.close(StatusCode.NORMAL, "I'm done");
+            }
         }
     }
 
@@ -121,6 +124,7 @@ public class RyobiWebSocket {
         session.getRemote().sendString(gson.toJson(authRequest));
         isAuthenticated = true;
         authenticateLatch.countDown();
+        LOGGER.debug("Successfully authenticated.");
     }
 
     public static class UnauthenticatedException extends Exception {
@@ -130,6 +134,13 @@ public class RyobiWebSocket {
 
         public UnauthenticatedException(final String message, final Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (this.session != null) {
+            this.session.close();
         }
     }
 }
