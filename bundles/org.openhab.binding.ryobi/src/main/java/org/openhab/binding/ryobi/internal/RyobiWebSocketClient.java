@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutionException;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
+import org.openhab.binding.ryobi.internal.RyobiWebSocket.Callback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,14 +37,14 @@ public class RyobiWebSocketClient {
         this.webSocketClient = new WebSocketClient();
     }
 
-    public RyobiWebSocket open(final String username, final String apiKey) throws IOException {
+    public RyobiWebSocket open(final String username, final String apiKey, final Callback callback) throws IOException {
         try {
             webSocketClient.start();
         } catch (Exception e) {
             throw new IOException("Failed to start websocket client.", e);
         }
 
-        final RyobiWebSocket socket = new RyobiWebSocket(username, apiKey);
+        final RyobiWebSocket socket = new RyobiWebSocket(username, apiKey, callback);
         try {
             webSocketClient.connect(socket, BASE_URI).get();
             LOGGER.debug("Web socket connected");

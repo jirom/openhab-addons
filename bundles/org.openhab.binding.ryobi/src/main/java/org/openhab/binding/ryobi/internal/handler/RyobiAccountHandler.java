@@ -13,23 +13,29 @@
 package org.openhab.binding.ryobi.internal.handler;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+
+import javax.annotation.Nullable;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
-import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.ryobi.internal.RyobiAccountManager;
 import org.openhab.binding.ryobi.internal.RyobiWebSocket;
+import org.openhab.binding.ryobi.internal.RyobiWebSocket.Callback;
 import org.openhab.binding.ryobi.internal.RyobiWebSocket.UnauthenticatedException;
 import org.openhab.binding.ryobi.internal.RyobiWebSocketClient;
 import org.openhab.binding.ryobi.internal.config.RyobiAccountConfig;
 import org.openhab.binding.ryobi.internal.models.BasicDevice;
 import org.openhab.binding.ryobi.internal.models.DetailedDevice;
+import org.openhab.binding.ryobi.internal.models.DetailedDevice.AttributeValue;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketDoorRequest;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketLightRequest;
+import org.openhab.binding.ryobi.internal.models.RyobiWebSocketRequest;
 import org.openhab.core.library.types.DecimalType;
 import org.openhab.core.library.types.OnOffType;
 import org.openhab.core.thing.Bridge;
@@ -52,14 +58,22 @@ import com.github.rholder.retry.WaitStrategies;
 /**
  * @author Manuel Gerome Navarro - Initial contribution
  */
-@NonNullByDefault
 public class RyobiAccountHandler extends BaseBridgeHandler {
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiAccountHandler.class);
 
     private final RyobiAccountManager accountManager;
     private final RyobiWebSocketClient webSocketClient;
+    private final WebSocketCallbackHandler webSocketCallbackHandler;
     private @Nullable RyobiAccountConfig config;
     private Optional<String> apiKey = Optional.empty();
+    private WebSocketSupplier webSocketSupplier = new WebSocketSupplier();
+
+    @NonNullByDefault
+    public interface DeviceUpdateListener {
+        String getDeviceId();
+
+        void onDeviceUpdate(final String deviceType, final AttributeValue attributeValue);
+    }
 
     private final RetryListener retryListener = new RetryListener() {
         @Override
@@ -67,6 +81,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
             if (attempt.hasException()) {
                 LOGGER.warn("Call failed. Attempting to reauthenticate first.", attempt.getExceptionCause());
                 reauthenticate();
+                webSocketSupplier.reset();
             } else {
                 LOGGER.debug("Call succeeded after {} attempts.", attempt.getAttemptNumber());
             }
@@ -78,6 +93,65 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         super(bridge);
         this.accountManager = ryobiAccountManager;
         this.webSocketClient = ryobiWebSocketClient;
+        this.webSocketCallbackHandler = new WebSocketCallbackHandler();
+    }
+
+    public void addListener(final DeviceUpdateListener deviceUpdateListener) throws IOException {
+        webSocketSupplier.addListener(deviceUpdateListener);
+    }
+
+    public void removeListener(final DeviceUpdateListener deviceUpdateListener) {
+        webSocketSupplier.removeListener(deviceUpdateListener);
+    }
+
+    private class WebSocketSupplier implements Supplier<RyobiWebSocket> {
+        private List<DeviceUpdateListener> deviceUpdateListeners = new ArrayList<>();
+        private @Nullable RyobiWebSocket webSocket = null;
+
+        @Override
+        public synchronized RyobiWebSocket get() {
+            if (webSocket == null) {
+                try {
+                    webSocket = webSocketClient.open(config.username, getApiKey(), webSocketCallbackHandler);
+                    for (final DeviceUpdateListener listener : deviceUpdateListeners) {
+                        subscribe(listener.getDeviceId());
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException("Could not open websocket connection", e);
+                }
+            }
+
+            return webSocket;
+        }
+
+        public void addListener(final DeviceUpdateListener deviceUpdateListener) throws IOException {
+            deviceUpdateListeners.add(deviceUpdateListener);
+            if (webSocket != null) {
+                subscribe(deviceUpdateListener.getDeviceId());
+            } else {
+                LOGGER.debug("There is no websocket is subscription will be added on connection");
+            }
+        }
+
+        public void removeListener(final DeviceUpdateListener deviceUpdateListener) {
+            deviceUpdateListeners.remove(deviceUpdateListener);
+        }
+
+        private void subscribe(final String deviceId) throws IOException {
+            final Retryer<Void> retryer = createRetryer();
+            try {
+                retryer.call(() -> {
+                    webSocket.subscribeDevice(deviceId);
+                    return null;
+                });
+            } catch (ExecutionException | RetryException e) {
+                throw new IOException("Failed to subscribe device.", e);
+            }
+        }
+
+        public synchronized void reset() {
+            this.webSocket = null;
+        }
     }
 
     @Override
@@ -101,7 +175,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         });
     }
 
-    private String getApiKey() throws IOException {
+    private synchronized String getApiKey() throws IOException {
         if (!apiKey.isPresent()) {
             apiKey = Optional.of(accountManager.getApiKey(config.username, config.password));
         }
@@ -125,21 +199,25 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
     public void handleCommand(ChannelUID channelUID, Command command) {
     }
 
+    private void sendMessage(final RyobiWebSocketRequest request) throws ExecutionException, RetryException {
+        final Retryer<Void> retryer = createRetryer();
+        retryer.call(() -> {
+            webSocketSupplier.get().sendMessage(request);
+            return null;
+        });
+    }
+
     public boolean updateDoorState(final String garageDoorOpenerId, final OnOffType state) {
         LOGGER.debug("Updating door state to: {}", state);
-        final Retryer<Boolean> retryer = createRetryer();
-
         final int doorState = state.as(DecimalType.class).intValue();
 
-        try (final RyobiWebSocket socket = webSocketClient.open(config.username, getApiKey())) {
-            retryer.call(() -> {
-                final RyobiWebSocketDoorRequest request = new RyobiWebSocketDoorRequest(
-                        RyobiWebSocketDoorRequest.DoorState.fromValue(doorState), garageDoorOpenerId);
-                socket.sendMessage(request);
+        try {
+            final RyobiWebSocketDoorRequest request = new RyobiWebSocketDoorRequest(
+                    RyobiWebSocketDoorRequest.DoorState.fromValue(doorState), garageDoorOpenerId);
+            sendMessage(request);
 
-                LOGGER.info("Successfully updated door state to: {}", state);
-                return true;
-            });
+            LOGGER.info("Successfully updated door state to: {}", state);
+            return true;
         } catch (Exception e) {
             LOGGER.error("Could not update door state.", e);
         }
@@ -149,20 +227,15 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
     public boolean updateLightState(final String garageDoorOpenerId, final OnOffType state) {
         LOGGER.debug("Updating light state to: {}", state);
-        final Retryer<Boolean> retryer = createRetryer();
-
         final boolean isLightOn = state.as(DecimalType.class).intValue() == 1;
-        try (final RyobiWebSocket socket = webSocketClient.open(config.username, getApiKey())) {
-            retryer.call(() -> {
-                final RyobiWebSocketLightRequest request = new RyobiWebSocketLightRequest(
-                        isLightOn ? RyobiWebSocketLightRequest.LightState.ON
-                                : RyobiWebSocketLightRequest.LightState.OFF,
-                        garageDoorOpenerId);
-                socket.sendMessage(request);
+        try {
+            final RyobiWebSocketLightRequest request = new RyobiWebSocketLightRequest(
+                    isLightOn ? RyobiWebSocketLightRequest.LightState.ON : RyobiWebSocketLightRequest.LightState.OFF,
+                    garageDoorOpenerId);
+            sendMessage(request);
 
-                LOGGER.info("Successfully updated light state to: {}", state);
-                return true;
-            });
+            LOGGER.info("Successfully updated light state to: {}", state);
+            return true;
         } catch (Exception e) {
             LOGGER.error("Could not update light state.", e);
         }
@@ -198,5 +271,23 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
                 .withStopStrategy(StopStrategies.stopAfterAttempt(3))
                 .withWaitStrategy(WaitStrategies.exponentialWait(10, TimeUnit.SECONDS)).withRetryListener(retryListener)
                 .build();
+    }
+
+    private class WebSocketCallbackHandler implements Callback {
+        @Override
+        public void onDeviceUpdate(String deviceId, String deviceType, AttributeValue attributeValue) {
+            webSocketSupplier.deviceUpdateListeners.forEach(listener -> {
+                if (listener.getDeviceId().equals(deviceId)) {
+                    listener.onDeviceUpdate(deviceType, attributeValue);
+                }
+            });
+        }
+
+        @Override
+        public synchronized void onError(Throwable e) {
+            LOGGER.error("Received socket error. Disposing current socket", e);
+            apiKey = Optional.empty();
+            webSocketSupplier.reset();
+        }
     }
 }

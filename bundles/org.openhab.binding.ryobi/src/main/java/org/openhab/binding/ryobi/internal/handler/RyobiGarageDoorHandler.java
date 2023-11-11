@@ -15,6 +15,7 @@ package org.openhab.binding.ryobi.internal.handler;
 import static org.openhab.binding.ryobi.internal.RyobiBindingConstants.CHANNEL_GARAGE_DOOR;
 import static org.openhab.binding.ryobi.internal.RyobiBindingConstants.CHANNEL_LIGHT;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Future;
@@ -24,7 +25,9 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.ryobi.internal.RyobiBindingConstants;
 import org.openhab.binding.ryobi.internal.config.RyobiGarageDoorConfig;
+import org.openhab.binding.ryobi.internal.handler.RyobiAccountHandler.DeviceUpdateListener;
 import org.openhab.binding.ryobi.internal.models.DetailedDevice;
+import org.openhab.binding.ryobi.internal.models.DetailedDevice.AttributeValue;
 import org.openhab.core.library.types.OnOffType;
 import org.openhab.core.thing.ChannelUID;
 import org.openhab.core.thing.Thing;
@@ -40,16 +43,19 @@ import org.slf4j.LoggerFactory;
  * @author Manuel Gerome Navarro - Initial contribution
  */
 @NonNullByDefault
-public class RyobiGarageDoorHandler extends BaseThingHandler {
+public class RyobiGarageDoorHandler extends BaseThingHandler implements DeviceUpdateListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiGarageDoorHandler.class);
     private static final Integer RAPID_REFRESH_SECONDS = 5;
     private static final Integer NORMAL_REFRESH_SECONDS = 60;
 
     private @Nullable RyobiGarageDoorConfig config;
+    private @Nullable RyobiAccountHandler accountHandler;
 
     private @Nullable Future<?> normalPollFuture;
     private @Nullable Future<?> rapidPollFuture;
+
+    private boolean didSubscriptionFail;
 
     /**
      * Creates a new instance of this class for the {@link Thing}.
@@ -95,11 +101,6 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
     @Override
     public void handleCommand(ChannelUID channelUID, Command command) {
         LOGGER.debug("Received command:{} for channel:{}", command, channelUID);
-
-        final RyobiAccountHandler accountHandler = (RyobiAccountHandler) getBridge().getHandler();
-        if (accountHandler == null) {
-            return;
-        }
 
         if (command instanceof RefreshType) {
             refreshStatus();
@@ -153,6 +154,14 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
         config = getConfigAs(RyobiGarageDoorConfig.class);
         updateStatus(ThingStatus.UNKNOWN);
 
+        accountHandler = (RyobiAccountHandler) getBridge().getHandler();
+        try {
+            accountHandler.addListener(this);
+        } catch (IOException e) {
+            LOGGER.error("Could not subscribe device for notifications");
+            didSubscriptionFail = true;
+        }
+
         scheduler.execute(() -> {
             refreshStatus();
         });
@@ -161,6 +170,7 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
 
     @Override
     public void dispose() {
+        accountHandler.removeListener(this);
         stopPolls();
     }
 
@@ -201,10 +211,13 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
     private synchronized void restartPolls(boolean rapid) {
         stopPolls();
         if (rapid) {
-            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 35, NORMAL_REFRESH_SECONDS,
-                    TimeUnit.SECONDS);
-            rapidPollFuture = scheduler.scheduleWithFixedDelay(this::rapidPoll, 3, RAPID_REFRESH_SECONDS,
-                    TimeUnit.SECONDS);
+            normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, NORMAL_REFRESH_SECONDS,
+                    NORMAL_REFRESH_SECONDS, TimeUnit.SECONDS);
+            if (didSubscriptionFail) {
+                // fallback to rapid polling if notification subscription fails
+                rapidPollFuture = scheduler.scheduleWithFixedDelay(this::rapidPoll, 3, RAPID_REFRESH_SECONDS,
+                        TimeUnit.SECONDS);
+            }
         } else {
             normalPollFuture = scheduler.scheduleWithFixedDelay(this::normalPoll, 0, NORMAL_REFRESH_SECONDS,
                     TimeUnit.SECONDS);
@@ -220,5 +233,26 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
     private void rapidPoll() {
         LOGGER.debug("Starting rapid polling");
         refreshStatus();
+    }
+
+    @Override
+    public void onDeviceUpdate(String deviceType, AttributeValue attributeValue) {
+        switch (deviceType) {
+            case DetailedDevice.ATTR_GARAGE_DOOR: {
+                final OnOffType doorState = OnOffType.from(((double) attributeValue.value) == 1);
+                updateState(CHANNEL_GARAGE_DOOR, doorState);
+                break;
+            }
+            case DetailedDevice.ATTR_GARAGE_LIGHT: {
+                final OnOffType lightState = OnOffType.from(((boolean) attributeValue.value));
+                updateState(CHANNEL_LIGHT, lightState);
+                break;
+            }
+        }
+    }
+
+    @Override
+    public String getDeviceId() {
+        return getId();
     }
 }

@@ -26,7 +26,10 @@ import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.openhab.binding.ryobi.internal.models.DetailedDevice;
+import org.openhab.binding.ryobi.internal.models.DetailedDevice.AttributeValue;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketAuthRequest;
+import org.openhab.binding.ryobi.internal.models.RyobiWebSocketNotificationSubscriptionRequest;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,11 +56,20 @@ public class RyobiWebSocket implements Closeable {
     private final String username;
     private final String apiKey;
 
+    private final Callback callback;
+
     private boolean isAuthenticated;
 
-    public RyobiWebSocket(String username, String apiKey) {
+    public interface Callback {
+        void onDeviceUpdate(final String deviceId, final String deviceType, final AttributeValue attributeValue);
+
+        void onError(Throwable error);
+    }
+
+    public RyobiWebSocket(String username, String apiKey, Callback callback) {
         this.username = username;
         this.apiKey = apiKey;
+        this.callback = callback;
         this.closeLatch = new CountDownLatch(1);
         this.authenticateLatch = new CountDownLatch(1);
         this.gson = new Gson();
@@ -86,6 +98,10 @@ public class RyobiWebSocket implements Closeable {
         }
     }
 
+    public void subscribeDevice(final String deviceId) throws UnauthenticatedException, IOException {
+        sendMessage(new RyobiWebSocketNotificationSubscriptionRequest(deviceId));
+    }
+
     private void onSuccessfulAuthentication() {
         isAuthenticated = true;
         authenticateLatch.countDown();
@@ -110,6 +126,31 @@ public class RyobiWebSocket implements Closeable {
                                 onSuccessfulAuthentication();
                             } else {
                                 LOGGER.error("Could not successfully authenticate. Received response: {}", message);
+                            }
+                        }
+                        break;
+                    }
+                    case "wskAttributeUpdateNtfy": {
+                        if (params != null) {
+                            final String deviceId = params.getAsJsonObject().get("varName").getAsString();
+                            final JsonElement lightState = params.getAsJsonObject()
+                                    .get(DetailedDevice.ATTR_GARAGE_LIGHT + ".lightState");
+                            if (lightState != null) {
+                                final AttributeValue attributeValue = gson.fromJson(lightState.toString(),
+                                        AttributeValue.class);
+                                if (attributeValue != null) {
+                                    callback.onDeviceUpdate(deviceId, DetailedDevice.ATTR_GARAGE_LIGHT, attributeValue);
+                                }
+                            }
+
+                            final JsonElement doorState = params.getAsJsonObject()
+                                    .get(DetailedDevice.ATTR_GARAGE_DOOR + ".doorState");
+                            if (doorState != null) {
+                                final AttributeValue attributeValue = gson.fromJson(doorState.toString(),
+                                        AttributeValue.class);
+                                if (attributeValue != null) {
+                                    callback.onDeviceUpdate(deviceId, DetailedDevice.ATTR_GARAGE_DOOR, attributeValue);
+                                }
                             }
                         }
                         break;
@@ -141,7 +182,7 @@ public class RyobiWebSocket implements Closeable {
 
     @OnWebSocketError
     public void onError(Throwable cause) {
-        LOGGER.error("WebSocket Error", cause);
+        callback.onError(cause);
     }
 
     public <T extends RyobiWebSocketRequest> void sendMessage(final T request)
