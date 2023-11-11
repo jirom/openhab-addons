@@ -67,6 +67,8 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
             if (attempt.hasException()) {
                 LOGGER.warn("Call failed. Attempting to reauthenticate first.", attempt.getExceptionCause());
                 reauthenticate();
+            } else {
+                LOGGER.debug("Call succeeded after {} attempts.", attempt.getAttemptNumber());
             }
         }
     };
@@ -194,7 +196,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         return RetryerBuilder.<T> newBuilder().retryIfExceptionOfType(IOException.class)
                 .retryIfExceptionOfType(UnauthenticatedException.class)
                 .withStopStrategy(StopStrategies.stopAfterAttempt(3))
-                .withWaitStrategy(WaitStrategies.fixedWait(1, TimeUnit.SECONDS)).withRetryListener(retryListener)
+                .withWaitStrategy(WaitStrategies.exponentialWait(10, TimeUnit.SECONDS)).withRetryListener(retryListener)
                 .build();
     }
 }

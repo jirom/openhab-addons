@@ -61,6 +61,7 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
     }
 
     private void refreshStatus() {
+        LOGGER.debug("Refreshing garage door state");
         final RyobiAccountHandler accountHandler = (RyobiAccountHandler) getBridge().getHandler();
         if (accountHandler == null) {
             LOGGER.error("Could not find account handler. Not refreshing.");
@@ -84,9 +85,11 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
             final Map<String, DetailedDevice.AttributeValue> lightAttributes = device.attributes
                     .get(DetailedDevice.ATTR_GARAGE_LIGHT);
             final OnOffType lightState = OnOffType.from(((boolean) lightAttributes.get("lightState").value));
-            updateState(CHANNEL_GARAGE_DOOR, lightState);
+            updateState(CHANNEL_LIGHT, lightState);
         });
         updateStatus(ThingStatus.ONLINE);
+
+        LOGGER.debug("Garage door state successfully refreshed");
     }
 
     @Override
@@ -156,6 +159,11 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
         restartPolls(false);
     }
 
+    @Override
+    public void dispose() {
+        stopPolls();
+    }
+
     private String getId() {
         if (config != null && config.id != null && !config.id.isEmpty()) {
             return config.id;
@@ -204,11 +212,13 @@ public class RyobiGarageDoorHandler extends BaseThingHandler {
     }
 
     private void normalPoll() {
+        LOGGER.debug("Starting normal polling");
         stopRapidPoll();
         refreshStatus();
     }
 
     private void rapidPoll() {
+        LOGGER.debug("Starting rapid polling");
         refreshStatus();
     }
 }

@@ -46,6 +46,7 @@ public class RyobiWebSocketClient {
         final RyobiWebSocket socket = new RyobiWebSocket(username, apiKey);
         try {
             webSocketClient.connect(socket, BASE_URI).get();
+            LOGGER.debug("Web socket connected");
         } catch (InterruptedException | ExecutionException e) {
             throw new IOException(e);
         }

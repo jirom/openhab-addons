@@ -32,6 +32,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 
 /**
  * @author Manuel Gerome Navarro - Initial contribution
@@ -40,6 +43,7 @@ import com.google.gson.Gson;
 @NonNullByDefault
 public class RyobiWebSocket implements Closeable {
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiWebSocket.class);
+    private static final long TIMEOUT_SEC = 10;
 
     private final Gson gson;
     private final CountDownLatch closeLatch;
@@ -82,9 +86,51 @@ public class RyobiWebSocket implements Closeable {
         }
     }
 
+    private void onSuccessfulAuthentication() {
+        isAuthenticated = true;
+        authenticateLatch.countDown();
+        LOGGER.debug("Successfully authenticated.");
+    }
+
     @OnWebSocketMessage
     public void onMessage(String message) {
         LOGGER.debug("Got message: {}", message);
+
+        try {
+            final JsonElement jsonMessage = JsonParser.parseString(message);
+
+            final JsonElement method = jsonMessage.getAsJsonObject().get("method");
+            final JsonElement params = jsonMessage.getAsJsonObject().get("params");
+            if (method != null) {
+                switch (method.getAsString()) {
+                    case "authorizedWebSocket": {
+                        if (params != null) {
+                            final JsonElement authorized = params.getAsJsonObject().get("authorized");
+                            if (authorized.getAsBoolean()) {
+                                onSuccessfulAuthentication();
+                            } else {
+                                LOGGER.error("Could not successfully authenticate. Received response: {}", message);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            final JsonElement result = jsonMessage.getAsJsonObject().get("method");
+            if (result != null && result.isJsonObject()) {
+                final JsonElement authorized = result.getAsJsonObject().get("authorized");
+                if (result != null && authorized.isJsonPrimitive()) {
+                    if (authorized.getAsBoolean()) {
+                        onSuccessfulAuthentication();
+                    } else {
+                        LOGGER.error("Could not successfully authenticate. Received response: {}", message);
+                    }
+                }
+            }
+        } catch (JsonParseException | IllegalStateException e) {
+            LOGGER.error("Could not parse websocket response: {}", message, e);
+        }
 
         if (message.contains("Thanks") && session != null) {
             if (this.session != null) {
@@ -102,9 +148,12 @@ public class RyobiWebSocket implements Closeable {
             throws IOException, UnauthenticatedException {
         if (!isAuthenticated && authenticateLatch.getCount() > 0) {
             try {
-                authenticateLatch.await();
+                boolean isAuthenticationSuccessful = authenticateLatch.await(TIMEOUT_SEC, TimeUnit.SECONDS);
+                if (!isAuthenticationSuccessful) {
+                    throw new UnauthenticatedException("Timed out waiting to authenticate");
+                }
             } catch (InterruptedException e) {
-                throw new UnauthenticatedException("Timed out waiting to authenticate", e);
+                LOGGER.warn("Authentication was interrupted.. Probably shuttin down?", e);
             }
         }
 
@@ -115,16 +164,9 @@ public class RyobiWebSocket implements Closeable {
         }
     }
 
-    public void authenticate() throws IOException {
-        if (session == null) {
-            return;
-        }
-
+    private void authenticate() throws IOException {
         final RyobiWebSocketAuthRequest authRequest = new RyobiWebSocketAuthRequest(username, apiKey);
         session.getRemote().sendString(gson.toJson(authRequest));
-        isAuthenticated = true;
-        authenticateLatch.countDown();
-        LOGGER.debug("Successfully authenticated.");
     }
 
     public static class UnauthenticatedException extends Exception {
