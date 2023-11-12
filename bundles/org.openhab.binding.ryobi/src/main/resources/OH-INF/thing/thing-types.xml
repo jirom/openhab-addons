@@ -28,7 +28,11 @@
 
 		<channels>
 			<channel id="garage-door" typeId="garage-door"/>
+			<channel id="garage-door-state" typeId="garage-door-state"/>
+			<channel id="garage-door-position" typeId="garage-door-position"/>
 			<channel id="light" typeId="light"/>
+			<channel id="alarm-state" typeId="alarm-state"/>
+			<channel id="motion-sensor" typeId="system.motion"/>
 		</channels>
 
 		<config-description>
@@ -44,6 +48,24 @@
 		<item-type>Switch</item-type>
 		<label>Garage Door</label>
 		<description>The open/close state of the garage door.</description>
+	</channel-type>
+	<channel-type id="garage-door-state">
+		<item-type>String</item-type>
+		<label>Garage Door State</label>
+		<description>States of the garage door [Closed, Open, Closing, Opening, Fault]</description>
+		<state readOnly="true"/>
+	</channel-type>
+	<channel-type id="garage-door-position">
+		<item-type>Rollershutter</item-type>
+		<label>Garage Door Position</label>
+		<description>The position of the garage door.</description>
+		<state min="0" max="100" step="1" readOnly="true"/>
+	</channel-type>
+	<channel-type id="alarm-state">
+		<item-type>Switch</item-type>
+		<label>Alarm State</label>
+		<description>Alarm State</description>
+		<state readOnly="true"/>
 	</channel-type>
 	<channel-type id="light">
 		<item-type>Switch</item-type>

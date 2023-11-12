@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +34,7 @@ import org.openhab.binding.ryobi.internal.config.RyobiAccountConfig;
 import org.openhab.binding.ryobi.internal.models.BasicDevice;
 import org.openhab.binding.ryobi.internal.models.DetailedDevice;
 import org.openhab.binding.ryobi.internal.models.DetailedDevice.AttributeValue;
+import org.openhab.binding.ryobi.internal.models.DoorState;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketDoorRequest;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketLightRequest;
 import org.openhab.binding.ryobi.internal.models.RyobiWebSocketRequest;
@@ -72,7 +74,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
     public interface DeviceUpdateListener {
         String getDeviceId();
 
-        void onDeviceUpdate(final String deviceType, final AttributeValue attributeValue);
+        void onDeviceUpdate(final Map<String, AttributeValue> attributes);
     }
 
     private final RetryListener retryListener = new RetryListener() {
@@ -125,11 +127,12 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         }
 
         public void addListener(final DeviceUpdateListener deviceUpdateListener) throws IOException {
+            LOGGER.debug("Attempting to subscribe to device notifications");
             deviceUpdateListeners.add(deviceUpdateListener);
             if (webSocket != null) {
                 subscribe(deviceUpdateListener.getDeviceId());
             } else {
-                LOGGER.debug("There is no websocket is subscription will be added on connection");
+                get();
             }
         }
 
@@ -212,8 +215,8 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         final int doorState = state.as(DecimalType.class).intValue();
 
         try {
-            final RyobiWebSocketDoorRequest request = new RyobiWebSocketDoorRequest(
-                    RyobiWebSocketDoorRequest.DoorState.fromValue(doorState), garageDoorOpenerId);
+            final RyobiWebSocketDoorRequest request = new RyobiWebSocketDoorRequest(DoorState.fromValue(doorState),
+                    garageDoorOpenerId);
             sendMessage(request);
 
             LOGGER.info("Successfully updated door state to: {}", state);
@@ -275,10 +278,10 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
     private class WebSocketCallbackHandler implements Callback {
         @Override
-        public void onDeviceUpdate(String deviceId, String deviceType, AttributeValue attributeValue) {
+        public void onDeviceUpdate(String deviceId, final Map<String, AttributeValue> attributes) {
             webSocketSupplier.deviceUpdateListeners.forEach(listener -> {
                 if (listener.getDeviceId().equals(deviceId)) {
-                    listener.onDeviceUpdate(deviceType, attributeValue);
+                    listener.onDeviceUpdate(attributes);
                 }
             });
         }

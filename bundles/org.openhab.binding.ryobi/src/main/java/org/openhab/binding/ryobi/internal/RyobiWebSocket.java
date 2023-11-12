@@ -14,8 +14,11 @@ package org.openhab.binding.ryobi.internal;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -34,6 +37,7 @@ import org.openhab.binding.ryobi.internal.models.RyobiWebSocketRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParseException;
@@ -61,7 +65,7 @@ public class RyobiWebSocket implements Closeable {
     private boolean isAuthenticated;
 
     public interface Callback {
-        void onDeviceUpdate(final String deviceId, final String deviceType, final AttributeValue attributeValue);
+        void onDeviceUpdate(final String deviceId, final Map<String, AttributeValue> attributes);
 
         void onError(Throwable error);
     }
@@ -100,12 +104,34 @@ public class RyobiWebSocket implements Closeable {
 
     public void subscribeDevice(final String deviceId) throws UnauthenticatedException, IOException {
         sendMessage(new RyobiWebSocketNotificationSubscriptionRequest(deviceId));
+        LOGGER.info("Subscribed to device notifications");
     }
 
     private void onSuccessfulAuthentication() {
         isAuthenticated = true;
         authenticateLatch.countDown();
         LOGGER.debug("Successfully authenticated.");
+    }
+
+    private Optional<AttributeValue> getAttribute(final JsonElement container, final String deviceType,
+            final String attributeName) {
+        final JsonElement attribute = container.getAsJsonObject().get(deviceType + "." + attributeName);
+        if (attribute != null) {
+            final AttributeValue attributeValue = gson.fromJson(attribute.toString(), AttributeValue.class);
+            return Optional.ofNullable(attributeValue);
+        } else {
+            return Optional.empty();
+        }
+    }
+
+    private static Consumer<AttributeValue> putInMap(final ImmutableMap.Builder<String, AttributeValue> attributes,
+            final String key) {
+        return new Consumer<DetailedDevice.AttributeValue>() {
+            @Override
+            public void accept(AttributeValue attributeValue) {
+                attributes.put(key, attributeValue);
+            }
+        };
     }
 
     @OnWebSocketMessage
@@ -132,27 +158,27 @@ public class RyobiWebSocket implements Closeable {
                     }
                     case "wskAttributeUpdateNtfy": {
                         if (params != null) {
+                            final ImmutableMap.Builder<String, AttributeValue> attributes = ImmutableMap.builder();
                             final String deviceId = params.getAsJsonObject().get("varName").getAsString();
-                            final JsonElement lightState = params.getAsJsonObject()
-                                    .get(DetailedDevice.ATTR_GARAGE_LIGHT + ".lightState");
-                            if (lightState != null) {
-                                final AttributeValue attributeValue = gson.fromJson(lightState.toString(),
-                                        AttributeValue.class);
-                                if (attributeValue != null) {
-                                    callback.onDeviceUpdate(deviceId, DetailedDevice.ATTR_GARAGE_LIGHT, attributeValue);
-                                }
-                            }
 
-                            final JsonElement doorState = params.getAsJsonObject()
-                                    .get(DetailedDevice.ATTR_GARAGE_DOOR + ".doorState");
-                            if (doorState != null) {
-                                final AttributeValue attributeValue = gson.fromJson(doorState.toString(),
-                                        AttributeValue.class);
-                                if (attributeValue != null) {
-                                    callback.onDeviceUpdate(deviceId, DetailedDevice.ATTR_GARAGE_DOOR, attributeValue);
-                                }
-                            }
+                            getAttribute(params, DetailedDevice.DEVICE_GARAGE_LIGHT, DetailedDevice.ATTR_LIGHT_STATE)
+                                    .ifPresent(putInMap(attributes, DetailedDevice.ATTR_LIGHT_STATE));
+
+                            getAttribute(params, DetailedDevice.DEVICE_GARAGE_DOOR, DetailedDevice.ATTR_DOOR_STATE)
+                                    .ifPresent(putInMap(attributes, DetailedDevice.ATTR_DOOR_STATE));
+
+                            getAttribute(params, DetailedDevice.DEVICE_GARAGE_DOOR, DetailedDevice.ATTR_DOOR_POSITION)
+                                    .ifPresent(putInMap(attributes, DetailedDevice.ATTR_DOOR_POSITION));
+
+                            getAttribute(params, DetailedDevice.DEVICE_GARAGE_DOOR, DetailedDevice.ATTR_MOTION_SENSOR)
+                                    .ifPresent(putInMap(attributes, DetailedDevice.ATTR_MOTION_SENSOR));
+
+                            getAttribute(params, DetailedDevice.DEVICE_GARAGE_DOOR, DetailedDevice.ATTR_ALARM_STATE)
+                                    .ifPresent(putInMap(attributes, DetailedDevice.ATTR_ALARM_STATE));
+
+                            callback.onDeviceUpdate(deviceId, attributes.build());
                         }
+
                         break;
                     }
                 }

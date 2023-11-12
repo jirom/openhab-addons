@@ -16,18 +16,30 @@ import java.util.Map;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
+import com.google.common.base.MoreObjects;
+
 /**
  * @author Manuel Gerome Navarro - Initial contribution
  */
 @NonNullByDefault
 public class DetailedDevice extends BasicDevice {
-    public static final String ATTR_GARAGE_DOOR = "garageDoor_7";
-    public static final String ATTR_GARAGE_LIGHT = "garageLight_7";
+    public static final String DEVICE_GARAGE_DOOR = "garageDoor_7";
+    public static final String DEVICE_GARAGE_LIGHT = "garageLight_7";
+    public static final String ATTR_DOOR_POSITION = "doorPosition";
+    public static final String ATTR_DOOR_STATE = "doorState";
+    public static final String ATTR_LIGHT_STATE = "lightState";
+    public static final String ATTR_MOTION_SENSOR = "motionSensor";
+    public static final String ATTR_ALARM_STATE = "alarmState";
 
     public Map<String, Map<String, AttributeValue>> attributes = Map.of();
 
     public static class AttributeValue {
         public Object value = new Object();
         public long lastSet;
+
+        @Override
+        public String toString() {
+            return MoreObjects.toStringHelper(this).add("value", value).add("lastSet", lastSet).toString();
+        }
     }
 }

@@ -32,6 +32,10 @@ public class RyobiBindingConstants {
 
     // List of all Channel ids
     public static final String CHANNEL_GARAGE_DOOR = "garage-door";
+    public static final String CHANNEL_GARAGE_DOOR_STATE = "garage-door-state";
+    public static final String CHANNEL_GARAGE_DOOR_POSITION = "garage-door-position";
+    public static final String CHANNEL_GARAGE_ALARM_STATE = "alarm-state";
+    public static final String CHANNEL_MOTION_SENSOR = "motion-sensor";
     public static final String CHANNEL_LIGHT = "light";
 
     // Configuration
