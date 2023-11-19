@@ -51,8 +51,8 @@ import com.google.common.base.Joiner;
 public class RyobiGarageDoorHandler extends BaseThingHandler implements DeviceUpdateListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RyobiGarageDoorHandler.class);
-    private static final Integer RAPID_REFRESH_SECONDS = 5;
-    private static final Integer NORMAL_REFRESH_SECONDS = 60;
+    private static final long RAPID_REFRESH_SECONDS = 5;
+    private static final long NORMAL_REFRESH_SECONDS = TimeUnit.MINUTES.toSeconds(10);
 
     private @Nullable RyobiGarageDoorConfig config;
     private @Nullable RyobiAccountHandler accountHandler;

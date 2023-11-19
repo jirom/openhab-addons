@@ -81,9 +81,12 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         @Override
         public <V> void onRetry(@Nullable Attempt<V> attempt) {
             if (attempt.hasException()) {
-                LOGGER.warn("Call failed. Attempting to reauthenticate first.", attempt.getExceptionCause());
-                reauthenticate();
-                webSocketSupplier.reset();
+                if (attempt.getExceptionCause().getMessage().contains("Authentication challenge")) {
+                    LOGGER.warn("Call failed. Attempting to reauthenticate first.", attempt.getExceptionCause());
+                    reauthenticate();
+                } else {
+                    LOGGER.warn("Call failed due to: {}. Attempting retry.", attempt.getExceptionCause().getMessage());
+                }
             } else {
                 LOGGER.debug("Call succeeded after {} attempts.", attempt.getAttemptNumber());
             }
@@ -114,7 +117,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         public synchronized RyobiWebSocket get() {
             if (webSocket == null) {
                 try {
-                    webSocket = webSocketClient.open(config.username, getApiKey(), webSocketCallbackHandler);
+                    webSocket = webSocketClient.open(config.username, getApiKey(false), webSocketCallbackHandler);
                     for (final DeviceUpdateListener listener : deviceUpdateListeners) {
                         subscribe(listener.getDeviceId());
                     }
@@ -153,6 +156,11 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         }
 
         public synchronized void reset() {
+            try {
+                this.webSocket.close();
+            } catch (IOException e) {
+                LOGGER.warn("Could not close websocket", e);
+            }
             this.webSocket = null;
         }
     }
@@ -164,7 +172,7 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         config = getConfigAs(RyobiAccountConfig.class);
         scheduler.execute(() -> {
             try {
-                this.apiKey = Optional.of(getApiKey());
+                this.apiKey = Optional.of(getApiKey(true));
             } catch (IOException e) {
                 LOGGER.error("Could not get api key!", e);
                 // TODO Actually check errors properly first!
@@ -178,17 +186,17 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
         });
     }
 
-    private synchronized String getApiKey() throws IOException {
-        if (!apiKey.isPresent()) {
+    private synchronized String getApiKey(boolean shouldForceRefresh) throws IOException {
+        if (shouldForceRefresh || !apiKey.isPresent()) {
             apiKey = Optional.of(accountManager.getApiKey(config.username, config.password));
         }
 
         return apiKey.orElseThrow();
     }
 
-    private void reauthenticate() {
+    private synchronized void reauthenticate() {
         try {
-            this.apiKey = Optional.of(getApiKey());
+            this.apiKey = Optional.of(getApiKey(true));
         } catch (IOException e) {
             LOGGER.error("Could not get api key!", e);
             // TODO Actually check errors properly first!
