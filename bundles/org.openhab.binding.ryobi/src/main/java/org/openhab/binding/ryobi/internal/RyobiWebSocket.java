@@ -54,7 +54,7 @@ public class RyobiWebSocket implements Closeable {
 
     private final Gson gson;
     private final CountDownLatch closeLatch;
-    private final CountDownLatch authenticateLatch;
+    private CountDownLatch authenticateLatch;
     private @Nullable Session session;
 
     private final String username;
@@ -232,6 +232,8 @@ public class RyobiWebSocket implements Closeable {
     }
 
     private void authenticate() throws IOException {
+        this.isAuthenticated = false;
+        this.authenticateLatch = new CountDownLatch(1);
         final RyobiWebSocketAuthRequest authRequest = new RyobiWebSocketAuthRequest(username, apiKey);
         session.getRemote().sendString(gson.toJson(authRequest));
     }

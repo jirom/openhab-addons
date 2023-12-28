@@ -213,7 +213,13 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
     private void sendMessage(final RyobiWebSocketRequest request) throws ExecutionException, RetryException {
         final Retryer<Void> retryer = createRetryer();
         retryer.call(() -> {
-            webSocketSupplier.get().sendMessage(request);
+            try {
+                webSocketSupplier.get().sendMessage(request);
+            } catch (UnauthenticatedException e) {
+                LOGGER.info("Discarding web socket connection to force re-auth due to: {}", e.getMessage());
+                webSocketSupplier.reset();
+                throw e;
+            }
             return null;
         });
     }
