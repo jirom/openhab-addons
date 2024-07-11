@@ -188,13 +188,14 @@ public class RyobiAccountHandler extends BaseBridgeHandler {
 
     private synchronized String getApiKey(boolean shouldForceRefresh) throws IOException {
         if (shouldForceRefresh || !apiKey.isPresent()) {
-            apiKey = Optional.of(accountManager.getApiKey(config.username, config.password));
+            apiKey = Optional.of(accountManager.generateApiKey(config.username, config.password));
         }
 
         return apiKey.orElseThrow();
     }
 
     private synchronized void reauthenticate() {
+        LOGGER.debug("Re-authenticating");
         try {
             this.apiKey = Optional.of(getApiKey(true));
         } catch (IOException e) {

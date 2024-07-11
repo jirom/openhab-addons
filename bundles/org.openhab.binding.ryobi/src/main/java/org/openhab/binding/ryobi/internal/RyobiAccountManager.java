@@ -52,19 +52,10 @@ public class RyobiAccountManager {
 
     private final Gson gson;
     private final HttpClient httpClient;
-    private String apiKey = "";
 
     public RyobiAccountManager(HttpClient httpClient) {
         this.gson = new Gson();
         this.httpClient = httpClient;
-    }
-
-    public synchronized String getApiKey(final String username, final String password) throws IOException {
-        if (apiKey.isEmpty()) {
-            this.apiKey = generateApiKey(username, password);
-        }
-
-        return apiKey;
     }
 
     public synchronized List<BasicDevice> getDevices() throws IOException {
@@ -85,7 +76,7 @@ public class RyobiAccountManager {
         return response.getDevice();
     }
 
-    private String generateApiKey(final String username, final String password) throws IOException {
+    public String generateApiKey(final String username, final String password) throws IOException {
         final URI loginUri = UriBuilder.fromUri(BASE_URI).path("/api/login").build();
 
         final LoginRequest request = new LoginRequest();
